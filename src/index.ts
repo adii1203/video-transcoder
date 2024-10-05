@@ -1,10 +1,11 @@
 import type { S3Event } from "aws-lambda";
-import { sqsClient, ecsClient } from "./clients";
+import { sqsClient, ecsClient } from "./clients.js";
 import {
   deleteSqsMessageCommand,
   receiveSqsMessagecommand,
   runEcsTaskCommand,
-} from "./command";
+} from "./command.js";
+import { log } from "console";
 
 async function main() {
   while (true) {
