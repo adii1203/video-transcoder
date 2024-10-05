@@ -1,22 +1,12 @@
-import {
-  DeleteMessageCommand,
-  ReceiveMessageCommand,
-} from "@aws-sdk/client-sqs";
 import type { S3Event } from "aws-lambda";
-import { RunTaskCommand } from "@aws-sdk/client-ecs";
 import { sqsClient, ecsClient } from "./clients";
-import dotenv from "dotenv";
-dotenv.config({
-  path: "./.env",
-});
+import {
+  deleteSqsMessageCommand,
+  receiveSqsMessagecommand,
+  runEcsTaskCommand,
+} from "./command";
 
 async function main() {
-  const receiveSqsMessagecommand = new ReceiveMessageCommand({
-    QueueUrl: process.env.SQS_QUEUE_URL,
-    MaxNumberOfMessages: 1,
-    WaitTimeSeconds: 20,
-  });
-
   while (true) {
     const { Messages } = await sqsClient.send(receiveSqsMessagecommand);
     if (!Messages) {
@@ -39,10 +29,7 @@ async function main() {
         if ("Service" in event && "Event" in event) {
           if (event.Event === "s3:TestEvent") {
             await sqsClient.send(
-              new DeleteMessageCommand({
-                QueueUrl: process.env.SQS_QUEUE_URL,
-                ReceiptHandle: message.ReceiptHandle,
-              })
+              deleteSqsMessageCommand(message.ReceiptHandle)
             );
             continue;
           }
@@ -56,61 +43,17 @@ async function main() {
             object: { key },
           } = s3;
 
-          // Spin up a docker container
+          const ecsResponse = await ecsClient.send(
+            runEcsTaskCommand(key, bucket.name)
+          );
 
-          const runEcsTaskCommand = new RunTaskCommand({
-            taskDefinition:
-              "arn:aws:ecs:ap-southeast-2:597088022507:task-definition/video_transcoder:4",
-            cluster:
-              "arn:aws:ecs:ap-southeast-2:597088022507:cluster/dev_cluster",
-            launchType: "FARGATE",
-            networkConfiguration: {
-              awsvpcConfiguration: {
-                assignPublicIp: "ENABLED",
-                securityGroups: ["sg-0e5045b2155bbf9e3"],
-                subnets: [
-                  "subnet-08133452aa5041d42",
-                  "subnet-08b6b451d71ce9a63",
-                  "subnet-04c53887e76ec7c47",
-                ],
-              },
-            },
-            overrides: {
-              containerOverrides: [
-                {
-                  name: "transcode-video",
-                  environment: [
-                    {
-                      name: "BUCKET_NAME",
-                      value: bucket.name,
-                    },
-                    {
-                      name: "VIDEO_KEY",
-                      value: key,
-                    },
-                    {
-                      name: "AWS_ACCESS_KEY_ID",
-                      value: process.env.AWS_ACCESS_KEY_ID,
-                    },
-                    {
-                      name: "AWS_SECRET_KEY_ID",
-                      value: process.env.AWS_SECRET_KEY_ID,
-                    },
-                  ],
-                },
-              ],
-            },
-          });
-
-          await ecsClient.send(runEcsTaskCommand);
+          if (!ecsResponse.tasks) {
+            console.log("No tasks found");
+            continue;
+          }
 
           // Delete the message from the queue
-          await sqsClient.send(
-            new DeleteMessageCommand({
-              QueueUrl: process.env.SQS_QUEUE_URL,
-              ReceiptHandle: message.ReceiptHandle,
-            })
-          );
+          await sqsClient.send(deleteSqsMessageCommand(message.ReceiptHandle));
         }
       }
     } catch (error) {
